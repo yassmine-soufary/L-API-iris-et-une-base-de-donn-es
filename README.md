@@ -1,89 +1,170 @@
-# TP Iris — Random Forest et XGBoost
+# TP4 — API Iris et Base de Données Redis
 
-Projet adapté à l'exercice page 23 du cours Docker. Deux classifieurs sont entraînés sur Iris, puis chargés par une API FastAPI. Commandes prévues pour **PowerShell sous Windows + Docker Desktop**. Aucun Python local n'est requis.
+## 1. Présentation du projet
 
-## 1. Lancer le projet
+Ce projet consiste à développer et déployer une API REST de classification des fleurs Iris avec **FastAPI**, puis à lui ajouter une mémoire grâce à **Redis**.
 
-Ouvrir PowerShell dans le dossier extrait et vérifier que Docker Desktop est démarré.
+L'API utilise des modèles de Machine Learning pour prédire l'espèce d'une fleur Iris à partir de ses caractéristiques. Redis permet de stocker un compteur du nombre de prédictions effectuées.
 
-```powershell
-docker info
+L'application est conteneurisée avec **Docker** et orchestrée avec **Docker Compose**.
+
+## 2. Objectifs du TP
+
+- Reprendre une API de classification Iris existante.
+- Intégrer Redis pour compter les prédictions.
+- Configurer les services avec Docker Compose.
+- Tester les endpoints de l'API.
+- Vérifier la persistance des données après redémarrage.
+- Observer l'effet de la suppression des volumes Docker.
+
+## 3. Technologies utilisées
+
+| Technologie | Utilisation |
+|---|---|
+| Python | Développement de l'application |
+| FastAPI | Création de l'API REST |
+| Scikit-learn | Modèle Random Forest |
+| XGBoost | Modèle de classification |
+| Redis | Stockage du compteur |
+| Docker | Conteneurisation |
+| Docker Compose | Orchestration des services |
+
+## 4. Architecture de l'application
+
+```text
+Client HTTP
+    |
+    v
+API FastAPI (Port 8000)
+    |
+    +----> Classification Iris
+    |       Random Forest / XGBoost
+    |
+    +----> Redis (Port 6379)
+               |
+               v
+       Compteur de prédictions
+               |
+               v
+         Volume Docker
+          redis-data
+```
+
+## 5. Installation et exécution
+
+### Prérequis
+
+- Docker Desktop
+- Docker Compose
+- Git
+
+### Cloner le projet
+
+```bash
+git clone https://github.com/yassmine-soufary/L-API-iris-et-une-base-de-donn-es.git
+cd L-API-iris-et-une-base-de-donn-es
+```
+
+### Vérifier la configuration
+
+```bash
+docker compose config
+```
+
+### Construire et démarrer les services
+
+```bash
 docker compose up --build -d
+```
+
+### Vérifier les conteneurs
+
+```bash
 docker compose ps
-docker compose logs train
 ```
 
-Le service `train` termine normalement avec le code 0, puis l'API démarre. Ouvrir http://localhost:8000/docs et http://localhost:8000/health.
+## 6. Tester l'API
 
-## 2. Tester les deux modèles
+L'API est accessible à l'adresse :
 
-```powershell
-$iris = @{ sepal_length=5.1; sepal_width=3.5; petal_length=1.4; petal_width=0.2 } | ConvertTo-Json
-Invoke-RestMethod -Uri http://localhost:8000/predict/random_forest -Method Post -ContentType 'application/json' -Body $iris
-Invoke-RestMethod -Uri http://localhost:8000/predict/xgboost -Method Post -ContentType 'application/json' -Body $iris
+http://localhost:8000
+
+Documentation interactive FastAPI :
+
+http://localhost:8000/docs
+
+### Exemple de prédiction
+
+Endpoint prévu :
+
+```http
+POST /predict/random_forest
 ```
 
-Consulter les scores (dans le volume partagé) :
+Exemple de données :
 
-```powershell
-docker compose run --rm --no-deps --entrypoint python api -c "from pathlib import Path; print(Path('/models/metrics.json').read_text())"
+```json
+{
+  "sepal_length": 5.1,
+  "sepal_width": 3.5,
+  "petal_length": 1.4,
+  "petal_width": 0.2
+}
 ```
 
-## 3. Version naïve et version optimisée
+### Consultation des statistiques
 
-Les quatre Dockerfiles se trouvent à la racine. La version naïve utilise une image complète, copie le code avant les dépendances et conserve le cache pip. La version optimisée utilise `slim`, copie les dépendances avant le code, exclut les fichiers inutiles, tourne sans root, et l'API est construite en deux étapes.
+Endpoint prévu :
 
-## 4. Benchmark (mesures réelles)
-
-```powershell
-.\benchmark.ps1
+```http
+GET /stats
 ```
 
-Le script crée `results/benchmark.csv` avec la taille de chaque image, la durée d'un build sans cache et celle d'un build immédiatement répété avec cache. Le build à froid ici est **sans cache de couches** ; ce n'est pas une mesure du temps de téléchargement initial de l'image de base.
+Redis conserve le nombre total de prédictions réalisées.
 
-Pour mesurer l'effet du réordonnancement après une modification du code, modifier un commentaire dans `src/api.py`, puis relancer :
+**Remarque :** les endpoints doivent être vérifiés dans `/docs` ou `/openapi.json` si l'API retourne une erreur `404 Not Found`.
 
-```powershell
-Measure-Command { docker build -f Dockerfile.serve.naive -t iris-serve:naive . }
-Measure-Command { docker build -f Dockerfile.serve.opt -t iris-serve:opt . }
-```
+## 7. Test de persistance Redis
 
-Remarque : si vous faites la modification après avoir construit les images, comparez les reconstructions ; le script de benchmark ne modifie pas les sources.
+### Premier test : arrêt sans suppression des volumes
 
-## 5. Trivy et corrections
-
-Installer Trivy séparément si nécessaire, puis :
-
-```powershell
-trivy image --severity HIGH,CRITICAL iris-serve:naive | Out-File results/trivy-naive.txt
-trivy image --severity HIGH,CRITICAL iris-serve:opt | Out-File results/trivy-opt.txt
-trivy image --severity HIGH,CRITICAL --ignore-unfixed iris-serve:opt
-trivy fs --scanners vuln,secret,misconfig .
-```
-
-**Important :** il est impossible d'affirmer que deux vulnérabilités critiques ont été corrigées avant d'avoir réellement scanné les images. Pour valider la consigne, identifier deux CVE CRITICAL présentes dans le rapport initial et ayant un correctif, relever les versions `INSTALLED` / `FIXED`, mettre à jour l'image de base ou les dépendances concernées, reconstruire, rescanner et conserver les rapports avant/après. Ne pas inventer des CVE.
-
-## 6. Arrêter
-
-```powershell
+```bash
 docker compose down
+docker compose up -d
 ```
 
-Ne pas utiliser `down -v` sauf pour supprimer volontairement les modèles stockés dans le volume.
+**Résultat attendu :** le compteur conserve sa valeur grâce au volume Docker Redis.
 
-## Tableau de compte rendu
+### Deuxième test : suppression des volumes
 
-| Indicateur | Naïve | Optimisée |
-|---|---|---|
-| Taille image (Mo) | À mesurer | À mesurer |
-| Build à froid (s) | À mesurer | À mesurer |
-| Rebuild immédiat (s) | À mesurer | À mesurer |
-| Reconstruction après modification du code (s) | À mesurer | À mesurer |
-| CVE CRITICAL avant/après | À scanner | À scanner |
+```bash
+docker compose down -v
+docker compose up --build -d
+```
 
-## Points de contrôle
+**Résultat attendu :** le compteur est réinitialisé à zéro, car les données du volume Redis sont supprimées.
 
-- Les fichiers `random_forest.joblib`, `xgboost.joblib` et `metrics.json` sont créés dans le volume nommé `iris-models`.
-- L'API charge les deux modèles au démarrage, après réussite de l'entraînement.
-- L'API fournit les routes `/health`, `/predict/random_forest`, `/predict/xgboost` et `/docs`.
-- `docker compose ps` doit montrer `train` terminé et `api` démarré.
+## 8. Résultats et observations
+
+Les tests permettent d'étudier :
+
+- La communication entre FastAPI et Redis.
+- Le fonctionnement du compteur de prédictions.
+- La gestion des services avec Docker Compose.
+- La différence entre `docker compose down` et `docker compose down -v`.
+
+Les résultats effectifs doivent être confirmés à partir des réponses de l'API et des captures d'écran réalisées.
+
+## 9. Conclusion
+
+Ce TP illustre l'intégration d'une base de données Redis dans une API de Machine Learning.
+
+Docker Compose facilite le déploiement des différents services, tandis que les volumes Docker permettent de conserver les données indépendamment du cycle de vie des conteneurs.
+
+Le projet met ainsi en pratique les notions d'API REST, de conteneurisation, de communication entre services et de persistance des données.
+
+---
+
+**Réalisé par :** Yassmine Soufary
+
+**Projet :** TP4 — L'API Iris et une base de données
